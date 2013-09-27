@@ -10,7 +10,7 @@ import tempfile
 
 def main(argv):
 	ap = argparse.ArgumentParser()
-	ap.add_argument('source', help='Source path.')
+	ap.add_argument('sources', nargs='+', help='Source paths.')
 	ap.add_argument('destination', help='Target destination. If this is an '
 		'extant directory, a uniquely-named backup file will be placed in it; '
 		'otherwise, that filename will be used for the backup.')
@@ -35,32 +35,40 @@ def main(argv):
 		help='Print backup command instead of running it.')
 	args = ap.parse_args()
 
+	if args.source_root:
+		os.chdir(args.source_root)
+
 	# Load extant checksums
 	old_checksums = {}
 	if args.old_checksums:
 		with open(args.old_checksums) as f:
 			for line in f:
-				fname, checksum = line.split()
+				checksum, fname = line.split()
 				old_checksums[fname] = checksum.decode('hex')
 
 	hash_algo = hashlib.new(args.hash_algo)
 
 	# Walk the source directory
-	args.source = os.path.abspath(args.source)
 	diffs = []
 	new_checksums = {}
-	for path, dirs, files in os.walk(args.source):
-		for fname in files:
-			fname = os.path.join(path, fname)
-			# If we have specified extant checksums or requested new ones,
-			# checksum the files and keep only differences.
-			if len(old_checksums) > 0 or args.new_checksums:
-				new_checksums[fname] = hash_file(hash_algo, fname)
-				if (fname not in old_checksums or
-					old_checksums[fname] != new_checksums[fname]):
+	for source in args.sources:
+		for path, dirs, files in _walk(source):
+			for fname in files:
+				fname = os.path.join(path, fname)
+				# If we have specified extant checksums or requested new ones,
+				# checksum the files and keep only differences.
+				if len(old_checksums) > 0 or args.new_checksums:
+					new_checksums[fname] = hash_file(hash_algo, fname)
+					if (fname not in old_checksums or
+						old_checksums[fname] != new_checksums[fname]):
+						diffs.append(fname)
+				else:
 					diffs.append(fname)
-			else:
-				diffs.append(fname)
+
+	# Write out checksums
+	if args.new_checksums:
+		with open(args.new_checksums, 'w') as f:
+			[f.write('%s\t%s\n' % (new_checksums[fname].encode('hex'), fname)) for fname in new_checksums]
 
 	# Package up source files
 	if os.path.isdir(args.destination):
@@ -68,9 +76,6 @@ def main(argv):
 			dir=args.destination, suffix='.tar.gz', delete=False
 			).name
 	command = ['tar']
-	if args.source_root:
-		command.append('-C')
-		command.append(args.source_root)
 	command.append('-czf')
 	command.append(args.destination)
 	command.extend(diffs)
@@ -79,6 +84,15 @@ def main(argv):
 		print ' '.join(command)
 	else:
 		subprocess.check_call(command)
+
+
+def _walk(path):
+	if os.path.isfile(path):
+		return [(os.path.dirname(path), [], [os.path.basename(path)])]
+	elif os.path.isdir(path):
+		return os.walk(path)
+	else:
+		raise OSError('Path %s is neither file nor directory!' % path)
 
 
 def hash_file(hasher, fname):
