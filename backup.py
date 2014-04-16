@@ -81,7 +81,7 @@ def main(argv):
 	command.extend(diffs)
 
 	if args.dry_run:
-		print ' '.join(command)
+		print(' '.join(command))
 	else:
 		subprocess.check_call(command)
 
