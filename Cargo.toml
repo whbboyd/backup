@@ -1,0 +1,8 @@
+[package]
+name = "backup"
+version = "0.1.0"
+authors = ["Will Boyd <will@whbboyd.com>"]
+
+[dependencies]
+docopt = "*"
+rustc-serialize = "*"
