@@ -1,7 +1,8 @@
 [package]
 name = "backup"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Will Boyd <will@whbboyd.com>"]
+license = "GPL-3.0"
 
 [dependencies]
 docopt = "*"
