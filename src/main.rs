@@ -5,8 +5,10 @@ use docopt::Docopt;
 use rustc_serialize::hex::FromHex;
 use std::collections::HashMap;
 use std::env::current_dir;
+use std::error::Error;
 use std::io::BufReader;
 use std::io::BufRead;
+use std::io::Write;
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::exit;
@@ -60,30 +62,36 @@ struct Args {
 	flag_dry_run: bool,
 }
 
-fn main() {
+enum MainError {
+	DocoptError(docopt::Error),
+	OtherError(String),
+}
+
+fn do_main() -> Result<(),MainError> {
 
 	// Parse commandline arguments
-	let args : Args = Docopt::new(USAGE)
+	let args : Args = try!(Docopt::new(USAGE)
 		.and_then(|d| d.decode())
-		.unwrap_or_else(|e| e.exit());
+		.or_else(|e| Err(MainError::DocoptError(e))));
 
 	// Figure out source root. If not specified on the commandline, it's the
 	// current directory.
-	let source_root = args.flag_source_root
-		.and_then(|d| Some(PathBuf::from(d)))
-		.unwrap_or_else(|| current_dir()
-			.unwrap_or_else(|e| {
-				println!("Couldn't use current directory as source root: {}", e);
-				exit(2);
-			})
-		);
-	if !source_root.exists() {
-		println!("Source root path does not exist");
-		exit(3);
+	let source_root = try!(args.flag_source_root
+		.ok_or(())
+		.and_then(|d| Ok(PathBuf::from(d)))
+		.or_else(|_| current_dir()
+			.or_else(|e| Err(MainError::OtherError(
+				format!("Couldn't use current directory as source root: {}", e)
+				.to_string()
+			)))
+		)
+	);
+	if !source_root.is_dir() {
+		return Err(MainError::OtherError("Source root path is not a directory".to_string()));
 	}
 
 	// Load extant checksums
-	let mut old_checksums : HashMap<String, Vec<u8>> = HashMap::new();
+	let mut old_checksums : HashMap<String, String> = HashMap::new();
 	match args.flag_old_checksums {
 		Some(f) => {
 			let checksums_file = File::open(f).unwrap_or_else(|e| {
@@ -92,17 +100,43 @@ fn main() {
 				});
 			let checksums_reader = BufReader::new(&checksums_file);
 			for line in checksums_reader.lines() {
-				let foo = line.unwrap();
-				let mut bar = foo.split_whitespace();
-				old_checksums.insert(bar.next().unwrap().to_string(), bar.next().unwrap().from_hex().unwrap());
-				
+				match line {
+					Ok(l) => {
+						let mut fields = l.split_whitespace();
+						let checksum = match fields.next() {
+							Some(f) => f,
+							None => { continue; }
+						};
+						let filename = match fields.next() {
+							Some(f) => f,
+							None => { continue; }
+						};
+						old_checksums.insert(filename.to_string(), checksum.to_string());
+					},
+					Err(_) => continue
+				}
 			}
 			println!("{:?}", checksums_file);
 		},
-		_ => ()
+		_ => (),
 	}
 
 
 println!("{:?}", old_checksums);
 println!("{:?}",source_root);
+	return Ok(());
+}
+
+
+fn main() {
+	match do_main() {
+		Err(e) => match e {
+			MainError::OtherError(s) => {
+				writeln!(&mut std::io::stderr(), "{}", s).unwrap();
+				exit(3);
+			},
+			MainError::DocoptError(e) => e.exit(),
+		},
+		_ => (),
+	}
 }
