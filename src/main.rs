@@ -25,6 +25,8 @@ use std::process::exit;
 use tar::Builder;
 use walkdir::WalkDir;
 
+const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
+
 const USAGE: &'static str = "
 Checksum-based incremental backup utility using standard tools and formats.
 
@@ -83,6 +85,7 @@ fn do_main() -> Result<(),MainError> {
 
 	// Parse commandline arguments
 	let args : Args = try!(Docopt::new(USAGE)
+		.and_then(|d| Ok(d.version(VERSION.and_then(|v| Some(v.to_string())))))
 		.and_then(|d| d.decode())
 		.or_else(|e| Err(MainError::DocoptError(e))));
 
