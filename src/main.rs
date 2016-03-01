@@ -1,11 +1,17 @@
+#![feature(path_relative_from)]
+
 extern crate crypto;
 extern crate docopt;
+extern crate flate2;
 extern crate rustc_serialize;
+extern crate tar;
 extern crate walkdir;
 
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use docopt::Docopt;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use std::collections::HashMap;
 use std::env::current_dir;
 use std::error::Error;
@@ -16,6 +22,7 @@ use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::exit;
+use tar::Builder;
 use walkdir::WalkDir;
 
 const USAGE: &'static str = "
@@ -23,7 +30,7 @@ Checksum-based incremental backup utility using standard tools and formats.
 
 This program checksums the files in the target directory, optionally compares
 them to a set of preexisting checksums, collects changed files in a tarball,
-and writes the new checksums;
+and writes the new checksums.
 
 Usage:
   backup [options] [--] <source>... <destination>
@@ -129,29 +136,36 @@ fn do_main() -> Result<(),MainError> {
 		_ => (),
 	}
 
-	// Walk the source directory and checksum files in it
+	// Walk specified files in the source directory and checksum files
 	let mut new_checksums : HashMap<String, String> = HashMap::new();
 	let mut sha1 = Sha1::new();
 	let mut buf = [0u8; 1048576];
-	for entry in WalkDir::new(&source_root).into_iter().filter_map(|e| e.ok()) {
-		let path = entry.path();
-		if !path.is_file() {
-			continue;
-		}
-		let open_result = File::open(path);
-		match open_result {
-			Ok(mut file) => {
-				let mut read_len: usize = 1;
-				while read_len > 0 {
-					read_len = file.read(&mut buf).unwrap();
-					sha1.input(&buf[0 .. read_len]);
-				}
-				let key = path.to_str().unwrap().to_string();
-				let value = sha1.result_str().to_string();
-				new_checksums.insert(key, value);
-				sha1.reset();
-			},
-			_ => continue
+	for source in args.arg_source {
+		let mut source_path = source_root.clone();
+		source_path.push(source);
+		for entry in WalkDir::new(&source_path).into_iter().filter_map(|e| e.ok()) {
+			let path = entry.path();
+			if !path.is_file() {
+				continue;
+			}
+			let open_result = File::open(path);
+			match open_result {
+				Ok(mut file) => {
+					let mut read_len: usize = 1;
+					while read_len > 0 {
+						read_len = file.read(&mut buf).unwrap();
+						sha1.input(&buf[0 .. read_len]);
+					}
+					//TODO: relative_fname is unstable, will be renamed to strip_prefix
+					let key = path.relative_from(&source_root)
+						.and_then(|p| Some(p.to_str().unwrap().to_string()))
+						.unwrap_or(path.to_str().unwrap().to_string());
+					let value = sha1.result_str().to_string();
+					new_checksums.insert(key, value);
+					sha1.reset();
+				},
+				_ => continue
+			}
 		}
 	}
 
@@ -179,23 +193,47 @@ fn do_main() -> Result<(),MainError> {
 	});
 
 	// Package altered files in source root into a tarball and write it to the destination
+	if !args.flag_dry_run {
+		try!(match File::create(&args.arg_destination) {
+			Ok(file) => {
+				//TODO: We probably don't always want to gzip this.
+				let mut archive = Builder::new(GzEncoder::new(file, Compression::Best));
+				for (fname, hash) in &new_checksums {
+					let old_hash = &old_checksums.get(fname);
+					if old_hash.is_none() || old_hash.unwrap() != hash {
+						let mut full_fname = source_root.clone();
+						full_fname.push(fname);
+						archive.append_file(fname, &mut File::open(full_fname).unwrap()).unwrap();
+					}
+				}
+				Ok(())
+			},
+			Err(e) => Err(MainError::OtherError(
+				format!("Error creating target file {}: {}", args.arg_destination, e)))
+		})
+	} else {
+		println!("[dry-run] Output file would be written to {}", args.arg_destination);
+		println!("[dry-run] Output would contain the following files:");
+		for (fname, hash) in &new_checksums {
+			let old_hash = &old_checksums.get(fname);
+			if old_hash.is_none() || old_hash.unwrap() != hash {
+				println!("[dry-run]\t{}\t{}", fname, hash);
+			}
+		}
+	}
 
-println!("{:?}", old_checksums);
-println!("{:?}", new_checksums);
-println!("{:?}",source_root);
-	return Ok(());
+	Ok(())
 }
 
-
 fn main() {
-	match do_main() {
-		Err(e) => match e {
+	if let Err(e) = do_main() {
+		match e {
 			MainError::OtherError(s) => {
 				writeln!(&mut std::io::stderr(), "{}", s).unwrap();
 				exit(3);
 			},
 			MainError::DocoptError(e) => e.exit(),
-		},
-		_ => (),
+		}
 	}
 }
+

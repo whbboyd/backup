@@ -1,11 +1,13 @@
 [package]
 name = "backup"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["Will Boyd <will@whbboyd.com>"]
 license = "GPL-3.0"
 
 [dependencies]
 docopt = "*"
+flate2 = { version = "*", features = ["zlib"], default-features = false }
 rust-crypto = "*"
 rustc-serialize = "*"
+tar = "*"
 walkdir = "*"
