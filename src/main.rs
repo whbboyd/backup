@@ -1,17 +1,22 @@
+extern crate crypto;
 extern crate docopt;
 extern crate rustc_serialize;
+extern crate walkdir;
 
+use crypto::digest::Digest;
+use crypto::sha1::Sha1;
 use docopt::Docopt;
-use rustc_serialize::hex::FromHex;
 use std::collections::HashMap;
 use std::env::current_dir;
 use std::error::Error;
-use std::io::BufReader;
-use std::io::BufRead;
-use std::io::Write;
 use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::exit;
+use walkdir::WalkDir;
 
 const USAGE: &'static str = "
 Checksum-based incremental backup utility using standard tools and formats.
@@ -74,6 +79,10 @@ fn do_main() -> Result<(),MainError> {
 		.and_then(|d| d.decode())
 		.or_else(|e| Err(MainError::DocoptError(e))));
 
+	if args.flag_dry_run {
+		println!("[dry-run] Dry-run specified, not writing anything.");
+	}
+
 	// Figure out source root. If not specified on the commandline, it's the
 	// current directory.
 	let source_root = try!(args.flag_source_root
@@ -105,24 +114,74 @@ fn do_main() -> Result<(),MainError> {
 						let mut fields = l.split_whitespace();
 						let checksum = match fields.next() {
 							Some(f) => f,
-							None => { continue; }
+							_ => continue
 						};
 						let filename = match fields.next() {
 							Some(f) => f,
-							None => { continue; }
+							_ => continue
 						};
 						old_checksums.insert(filename.to_string(), checksum.to_string());
 					},
-					Err(_) => continue
+					_ => continue
 				}
 			}
-			println!("{:?}", checksums_file);
 		},
 		_ => (),
 	}
 
+	// Walk the source directory and checksum files in it
+	let mut new_checksums : HashMap<String, String> = HashMap::new();
+	let mut sha1 = Sha1::new();
+	let mut buf = [0u8; 1048576];
+	for entry in WalkDir::new(&source_root).into_iter().filter_map(|e| e.ok()) {
+		let path = entry.path();
+		if !path.is_file() {
+			continue;
+		}
+		let open_result = File::open(path);
+		match open_result {
+			Ok(mut file) => {
+				let mut read_len: usize = 1;
+				while read_len > 0 {
+					read_len = file.read(&mut buf).unwrap();
+					sha1.input(&buf[0 .. read_len]);
+				}
+				let key = path.to_str().unwrap().to_string();
+				let value = sha1.result_str().to_string();
+				new_checksums.insert(key, value);
+				sha1.reset();
+			},
+			_ => continue
+		}
+	}
+
+	// Write new checksums
+	try!(match (args.flag_dry_run, args.flag_new_checksums) {
+		(false, Some(fname)) =>
+			match File::create(&fname) {
+				Ok(mut file) => {
+					for (key, value) in &new_checksums {
+						try!(file.write_all(
+							&(format!("{}\t{}\n", value, key).into_bytes()))
+							.or_else(|e| Err(MainError::OtherError(
+								format!("Error writing to checksum file {}: {}", fname, e)))));
+					}
+					Ok(())
+				},
+				Err(e) => Err(MainError::OtherError(
+					format!("Error creating checksum file {}: {}", fname, e)))
+			},
+		(true, Some(fname)) => {
+			println!("[dry-run] Checksums would be written to {}", fname);
+			Ok(())
+		},
+		_ => Ok(())
+	});
+
+	// Package altered files in source root into a tarball and write it to the destination
 
 println!("{:?}", old_checksums);
+println!("{:?}", new_checksums);
 println!("{:?}",source_root);
 	return Ok(());
 }

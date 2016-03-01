@@ -6,4 +6,6 @@ license = "GPL-3.0"
 
 [dependencies]
 docopt = "*"
+rust-crypto = "*"
 rustc-serialize = "*"
+walkdir = "*"
