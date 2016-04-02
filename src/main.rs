@@ -1,5 +1,3 @@
-#![feature(path_relative_from)]
-
 extern crate crypto;
 extern crate docopt;
 extern crate flate2;
@@ -14,12 +12,8 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use std::collections::HashMap;
 use std::env::current_dir;
-use std::error::Error;
 use std::fs::File;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::Read;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::exit;
 use tar::Builder;
@@ -159,9 +153,8 @@ fn do_main() -> Result<(),MainError> {
 						read_len = file.read(&mut buf).unwrap();
 						sha1.input(&buf[0 .. read_len]);
 					}
-					//TODO: relative_fname is unstable, will be renamed to strip_prefix
-					let key = path.relative_from(&source_root)
-						.and_then(|p| Some(p.to_str().unwrap().to_string()))
+					let key = path.strip_prefix(&source_root)
+						.and_then(|p| Ok(p.to_str().unwrap().to_string()))
 						.unwrap_or(path.to_str().unwrap().to_string());
 					let value = sha1.result_str().to_string();
 					new_checksums.insert(key, value);
