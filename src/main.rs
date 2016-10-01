@@ -40,7 +40,7 @@ Options:
                 The root of the backup. This should be a prefix to the source
                 path. This prefix will be removed from file paths when
                 constructing the destination file. Default is the current
-				working directory.
+                working directory.
   -c <file>, --old-checksums <file>
                 Checksums to compare against. If not specified, all target
                 files will be backed up; otherwise, all non-matching and new
@@ -49,11 +49,12 @@ Options:
   -n <file>, --new-checksums <file>
                 File to which to write checksums. The file will be overwritten
                 by filename, whitespace, hexadecimal checksum (as output by
-                e.g. md5sum).
+                e.g. sha1sum).
   -x <algorithm>, --hash-algorithm <algorithm>
                 Checksumming algorithm to use. Available options are platform-
                 dependent. This option affects the interpretation of checksums
-                in the old-checksums and new-checksums files. [default: md5]
+                in the old-checksums and new-checksums files. BUG: At the
+                moment, this option is ignored. [default: sha1]
   -d, --dry-run
                 Don't actually write any files, print what would be done
                 instead.
