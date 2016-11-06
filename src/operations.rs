@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 
 use MainError;
 
-pub fn load_checksums(fname: String) -> Result<HashMap<String, String>, MainError> {
+pub fn load_checksums(fname: &str) -> Result<HashMap<String, String>, MainError> {
 	match File::open(fname) {
 		Ok(checksums_file) => {
 			let mut checksums : HashMap<String, String> = HashMap::new();
@@ -41,7 +41,7 @@ pub fn load_checksums(fname: String) -> Result<HashMap<String, String>, MainErro
 	}
 }
 
-pub fn checksum_directory(sources: Vec<String>, source_root: &PathBuf)
+pub fn checksum_directory(sources: &[String], source_root: &PathBuf)
 		-> HashMap<String, String> {
 	let mut checksums : HashMap<String, String> = HashMap::new();
 	//TODO: Make this runtime-swappable
@@ -74,6 +74,7 @@ pub fn checksum_directory(sources: Vec<String>, source_root: &PathBuf)
 					sha1.reset();
 				},
 				Err(e) => {
+					//TODO: There are probably some cases where we should abort here.
 					trace!("Skipping {} ({})", path.display(), e);
 					continue
 				}

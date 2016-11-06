@@ -110,7 +110,7 @@ fn do_main() -> Result<(),MainError> {
 	let old_checksums = match args.flag_old_checksums {
 		Some(fname) => {
 			debug!("Loading previous version checksums from {}...", fname);
-			try!(operations::load_checksums(fname))
+			try!(operations::load_checksums(&fname))
 		},
 		None => HashMap::with_capacity(0)
 	};
@@ -118,7 +118,7 @@ fn do_main() -> Result<(),MainError> {
 
 	// Walk specified files in the source directory and checksum files
 	debug!("Walking/checking source directory...");
-	let new_checksums = operations::checksum_directory(args.arg_source, &source_root);
+	let new_checksums = operations::checksum_directory(&args.arg_source, &source_root);
 
 	// Write new checksums
 	try!(match (args.flag_dry_run, args.flag_new_checksums) {
