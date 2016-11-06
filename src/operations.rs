@@ -11,6 +11,18 @@ use walkdir::WalkDir;
 
 use MainError;
 
+/// Load checksums from a given file.
+///
+/// The file referenced by `fname` is opened and read. Each line is treated as
+/// a tab-separated filename/checksum pair and inserted into a map from
+/// filenames to sums. If a given file is repeated, the last iteration wins.
+/// Lines which cannot be read or parsed will be ignored (however, the parser
+/// is extremely lenient; this is essentially only lines with no whitespace).
+///
+/// # Errors
+///
+/// This function will return a `MainError::OtherError` with a descriptive
+/// message if it experiences an I/O error.
 pub fn load_checksums(fname: &str) -> Result<HashMap<String, String>, MainError> {
 	match File::open(fname) {
 		Ok(checksums_file) => {
@@ -41,6 +53,18 @@ pub fn load_checksums(fname: &str) -> Result<HashMap<String, String>, MainError>
 	}
 }
 
+/// Checksum all the files in a given directory.
+///
+/// All the entries in `sources` are read. If they are directories, they are
+/// walked fully, and all the files they contain are checksummed; if they are
+/// files, they are themselves checksummed. The filenames, relative to
+/// `source_root`, and checksums are inserted into a map from filenames to
+/// sums. Files which cannot be opened are skipped.
+///
+/// # Panics
+///
+/// Probably, if you have it walk something weird which is neither a directory
+/// nor a normal file.
 pub fn checksum_directory(sources: &[String], source_root: &PathBuf)
 		-> HashMap<String, String> {
 	let mut checksums : HashMap<String, String> = HashMap::new();
@@ -85,6 +109,14 @@ pub fn checksum_directory(sources: &[String], source_root: &PathBuf)
 	checksums
 }
 
+/// Save checksums to a given file.
+///
+/// The given file is written with tab-separated filename/checksum pairs.
+///
+/// # Errors
+///
+/// This function will return a `MainError::OtherError` with a descriptive
+/// message if it the output file cannot be created or written to.
 pub fn save_checksums(checksums: &HashMap<String, String>, fname:&str)
 		-> Result<(), MainError> {
 	match File::create(fname) {
@@ -104,6 +136,16 @@ pub fn save_checksums(checksums: &HashMap<String, String>, fname:&str)
 	}
 }
 
+/// Copy changed files to the given archive file.
+///
+/// The given file is written with a gzipped tar file containing all files in
+/// `new_checksums` with checksums absent or different from those in
+/// `old_checksums`, relative to `source_root`.
+///
+/// # Errors
+///
+/// This function will return a `MainError::OtherError` with a descriptive
+/// message if the output file cannot be created or written to.
 pub fn write_archive(
 		new_checksums: &HashMap<String, String>,
 		old_checksums: &HashMap<String, String>,

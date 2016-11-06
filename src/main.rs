@@ -8,7 +8,7 @@ extern crate rustc_serialize;
 extern crate tar;
 extern crate walkdir;
 
-mod operations;
+pub mod operations;
 
 use docopt::Docopt;
 use env_logger::LogBuilder;
@@ -18,9 +18,9 @@ use std::env;
 use std::path::PathBuf;
 use std::process::exit;
 
-const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
+pub const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
-const USAGE: &'static str = "
+pub const USAGE: &'static str = "
 Checksum-based incremental backup utility using standard tools and formats.
 
 This program checksums the files in the target directory, optionally compares
@@ -70,6 +70,11 @@ struct Args {
 	flag_dry_run: bool,
 }
 
+/// Errors returned from main method.
+///
+/// This serves to distinguish `DocoptError`s due to commandline parsing (which
+/// should result in usage being printed) from other errors (which should
+/// result in only a descriptive error being printed).
 pub enum MainError {
 	DocoptError(docopt::Error),
 	OtherError(String),
