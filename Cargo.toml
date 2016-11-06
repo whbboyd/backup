@@ -6,7 +6,9 @@ license = "GPL-3.0"
 
 [dependencies]
 docopt = "*"
+env_logger = "*"
 flate2 = { version = "*", features = ["zlib"], default-features = false }
+log = "*"
 rust-crypto = "*"
 rustc-serialize = "*"
 tar = "*"

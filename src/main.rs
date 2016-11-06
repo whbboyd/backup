@@ -1,6 +1,9 @@
 extern crate crypto;
 extern crate docopt;
+extern crate env_logger;
 extern crate flate2;
+#[macro_use]
+extern crate log;
 extern crate rustc_serialize;
 extern crate tar;
 extern crate walkdir;
@@ -8,9 +11,12 @@ extern crate walkdir;
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
 use docopt::Docopt;
+use env_logger::LogBuilder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use log::{LogLevel, LogRecord, SetLoggerError};
 use std::collections::HashMap;
+use std::env;
 use std::env::current_dir;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -85,7 +91,7 @@ fn do_main() -> Result<(),MainError> {
 		.or_else(|e| Err(MainError::DocoptError(e))));
 
 	if args.flag_dry_run {
-		println!("[dry-run] Dry-run specified, not writing anything.");
+		info!("[dry-run] Dry-run specified, not writing anything.");
 	}
 
 	// Figure out source root. If not specified on the commandline, it's the
@@ -103,13 +109,15 @@ fn do_main() -> Result<(),MainError> {
 	if !source_root.is_dir() {
 		return Err(MainError::OtherError("Source root path is not a directory".to_string()));
 	}
+	debug!("Using {} as source directory...", source_root.as_path().display());
 
 	// Load extant checksums
 	let mut old_checksums : HashMap<String, String> = HashMap::new();
 	match args.flag_old_checksums {
 		Some(f) => {
+			debug!("Loading previous version checksums from {}...", f);
 			let checksums_file = File::open(f).unwrap_or_else(|e| {
-					println!("Couldn't open checksums file: {}", e);
+					error!("Couldn't open checksums file: {}", e);
 					exit(4);
 				});
 			let checksums_reader = BufReader::new(&checksums_file);
@@ -125,6 +133,7 @@ fn do_main() -> Result<(),MainError> {
 							Some(f) => f,
 							_ => continue
 						};
+						trace!("Previous version checksum: {}\t{}", filename, checksum);
 						old_checksums.insert(filename.to_string(), checksum.to_string());
 					},
 					_ => continue
@@ -133,8 +142,10 @@ fn do_main() -> Result<(),MainError> {
 		},
 		_ => (),
 	}
+	debug!("Loaded {} previous version checksums...", old_checksums.len());
 
 	// Walk specified files in the source directory and checksum files
+	debug!("Walking/checking source directory...");
 	let mut new_checksums : HashMap<String, String> = HashMap::new();
 	let mut sha1 = Sha1::new();
 	let mut buf = [0u8; 1048576];
@@ -144,7 +155,8 @@ fn do_main() -> Result<(),MainError> {
 		for entry in WalkDir::new(&source_path).into_iter().filter_map(|e| e.ok()) {
 			let path = entry.path();
 			if !path.is_file() {
-				continue;
+				trace!("Skipping {} (not a file)", path.display());
+				continue
 			}
 			let open_result = File::open(path);
 			match open_result {
@@ -158,17 +170,22 @@ fn do_main() -> Result<(),MainError> {
 						.and_then(|p| Ok(p.to_str().unwrap().to_string()))
 						.unwrap_or(path.to_str().unwrap().to_string());
 					let value = sha1.result_str().to_string();
+					trace!("Current version checksum: {}\t{}", key, value);
 					new_checksums.insert(key, value);
 					sha1.reset();
 				},
-				_ => continue
+				Err(e) => {
+					trace!("Skipping {} ({})", path.display(), e);
+					continue
+				}
 			}
 		}
 	}
 
 	// Write new checksums
 	try!(match (args.flag_dry_run, args.flag_new_checksums) {
-		(false, Some(fname)) =>
+		(false, Some(fname)) => {
+			debug!("Writing current version checksums...");
 			match File::create(&fname) {
 				Ok(mut file) => {
 					for (key, value) in &new_checksums {
@@ -177,30 +194,42 @@ fn do_main() -> Result<(),MainError> {
 							.or_else(|e| Err(MainError::OtherError(
 								format!("Error writing to checksum file {}: {}", fname, e)))));
 					}
+					trace!("Wrote {} current version checksums to {}...",
+						new_checksums.len(), fname);
 					Ok(())
 				},
 				Err(e) => Err(MainError::OtherError(
 					format!("Error creating checksum file {}: {}", fname, e)))
-			},
+			}
+		},
 		(true, Some(fname)) => {
-			println!("[dry-run] Checksums would be written to {}", fname);
+			info!("[dry-run] Checksums would be written to {}", fname);
 			Ok(())
 		},
-		_ => Ok(())
+		_ => {
+			debug!(concat!("No current version checksum file specified, ",
+				"not writing current version checksums..."));
+			Ok(())
+		}
 	});
 
 	// Package altered files in source root into a tarball and write it to the destination
 	if !args.flag_dry_run {
+		debug!("Writing backup file to {}...", args.arg_destination);
 		try!(match File::create(&args.arg_destination) {
 			Ok(file) => {
 				//TODO: We probably don't always want to gzip this.
 				let mut archive = Builder::new(GzEncoder::new(file, Compression::Best));
 				for (fname, hash) in &new_checksums {
 					let old_hash = &old_checksums.get(fname);
-					if old_hash.is_none() || old_hash.unwrap() != hash {
+					if old_hash.map_or(true, |h| h != hash) {
+						trace!("Mismatched hashes, archiving: {}\told: {}\tnew: {}",
+							fname, old_hash.unwrap_or(&"<none>".to_string()), hash);
 						let mut full_fname = source_root.clone();
 						full_fname.push(fname);
 						archive.append_file(fname, &mut File::open(full_fname).unwrap()).unwrap();
+					} else {
+						trace!("Matched hashes, not archiving: {}\t{}", fname, hash);
 					}
 				}
 				Ok(())
@@ -209,24 +238,30 @@ fn do_main() -> Result<(),MainError> {
 				format!("Error creating target file {}: {}", args.arg_destination, e)))
 		})
 	} else {
-		println!("[dry-run] Output file would be written to {}", args.arg_destination);
-		println!("[dry-run] Output would contain the following files:");
+		info!("[dry-run] Output file would be written to {}", args.arg_destination);
+		info!("[dry-run] Output would contain the following files:");
 		for (fname, hash) in &new_checksums {
 			let old_hash = &old_checksums.get(fname);
 			if old_hash.is_none() || old_hash.unwrap() != hash {
-				println!("[dry-run]\t{}\t{}", fname, hash);
+				info!("[dry-run]\t{}\t{}", fname, hash);
 			}
 		}
 	}
 
+	debug!("Done!");
 	Ok(())
 }
 
 fn main() {
+	if let Err(e) = init_log() {
+		writeln!(&mut std::io::stderr(), "Could not set logger: {}", e).unwrap();
+		exit(5);
+	}
+
 	if let Err(e) = do_main() {
 		match e {
 			MainError::OtherError(s) => {
-				writeln!(&mut std::io::stderr(), "{}", s).unwrap();
+				error!("{}", s);
 				exit(3);
 			},
 			MainError::DocoptError(e) => e.exit(),
@@ -234,3 +269,19 @@ fn main() {
 	}
 }
 
+fn init_log() -> Result<(), SetLoggerError> {
+	let mut builder = LogBuilder::new();
+	builder.format(|record: &LogRecord| {
+		format!("[{} {}:{}] [{}] {}",
+			record.location().module_path(),
+			record.location().file(),
+			record.location().line(),
+			record.level(),
+			record.args()) } );
+	match env::var("RUST_LOG") {
+		Ok(log_str) => { builder.parse(&log_str); },
+		Err(_) => { builder.filter(None, LogLevel::Info.to_log_level_filter()); }
+	}
+	try!(builder.init());
+	Ok(())
+}
