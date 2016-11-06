@@ -8,22 +8,15 @@ extern crate rustc_serialize;
 extern crate tar;
 extern crate walkdir;
 
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
+mod operations;
+
 use docopt::Docopt;
 use env_logger::LogBuilder;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use log::{LogLevel, LogRecord, SetLoggerError};
 use std::collections::HashMap;
 use std::env;
-use std::env::current_dir;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::exit;
-use tar::Builder;
-use walkdir::WalkDir;
 
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
@@ -77,7 +70,7 @@ struct Args {
 	flag_dry_run: bool,
 }
 
-enum MainError {
+pub enum MainError {
 	DocoptError(docopt::Error),
 	OtherError(String),
 }
@@ -99,7 +92,7 @@ fn do_main() -> Result<(),MainError> {
 	let source_root = try!(args.flag_source_root
 		.ok_or(())
 		.and_then(|d| Ok(PathBuf::from(d)))
-		.or_else(|_| current_dir()
+		.or_else(|_| env::current_dir()
 			.or_else(|e| Err(MainError::OtherError(
 				format!("Couldn't use current directory as source root: {}", e)
 				.to_string()
@@ -107,100 +100,31 @@ fn do_main() -> Result<(),MainError> {
 		)
 	);
 	if !source_root.is_dir() {
-		return Err(MainError::OtherError("Source root path is not a directory".to_string()));
+		return Err(MainError::OtherError(format!(
+			"Source root path {} is not a directory", source_root.as_path().display())
+			.to_string()));
 	}
 	debug!("Using {} as source directory...", source_root.as_path().display());
 
 	// Load extant checksums
-	let mut old_checksums : HashMap<String, String> = HashMap::new();
-	match args.flag_old_checksums {
-		Some(f) => {
-			debug!("Loading previous version checksums from {}...", f);
-			let checksums_file = File::open(f).unwrap_or_else(|e| {
-					error!("Couldn't open checksums file: {}", e);
-					exit(4);
-				});
-			let checksums_reader = BufReader::new(&checksums_file);
-			for line in checksums_reader.lines() {
-				match line {
-					Ok(l) => {
-						let mut fields = l.split_whitespace();
-						let checksum = match fields.next() {
-							Some(f) => f,
-							_ => continue
-						};
-						let filename = match fields.next() {
-							Some(f) => f,
-							_ => continue
-						};
-						trace!("Previous version checksum: {}\t{}", filename, checksum);
-						old_checksums.insert(filename.to_string(), checksum.to_string());
-					},
-					_ => continue
-				}
-			}
+	let old_checksums = match args.flag_old_checksums {
+		Some(fname) => {
+			debug!("Loading previous version checksums from {}...", fname);
+			try!(operations::load_checksums(fname))
 		},
-		_ => (),
-	}
+		_ => HashMap::with_capacity(0)
+	};
 	debug!("Loaded {} previous version checksums...", old_checksums.len());
 
 	// Walk specified files in the source directory and checksum files
 	debug!("Walking/checking source directory...");
-	let mut new_checksums : HashMap<String, String> = HashMap::new();
-	let mut sha1 = Sha1::new();
-	let mut buf = [0u8; 1048576];
-	for source in args.arg_source {
-		let mut source_path = source_root.clone();
-		source_path.push(source);
-		for entry in WalkDir::new(&source_path).into_iter().filter_map(|e| e.ok()) {
-			let path = entry.path();
-			if !path.is_file() {
-				trace!("Skipping {} (not a file)", path.display());
-				continue
-			}
-			let open_result = File::open(path);
-			match open_result {
-				Ok(mut file) => {
-					let mut read_len: usize = 1;
-					while read_len > 0 {
-						read_len = file.read(&mut buf).unwrap();
-						sha1.input(&buf[0 .. read_len]);
-					}
-					let key = path.strip_prefix(&source_root)
-						.and_then(|p| Ok(p.to_str().unwrap().to_string()))
-						.unwrap_or(path.to_str().unwrap().to_string());
-					let value = sha1.result_str().to_string();
-					trace!("Current version checksum: {}\t{}", key, value);
-					new_checksums.insert(key, value);
-					sha1.reset();
-				},
-				Err(e) => {
-					trace!("Skipping {} ({})", path.display(), e);
-					continue
-				}
-			}
-		}
-	}
+	let new_checksums = operations::checksum_directory(args.arg_source, &source_root);
 
 	// Write new checksums
 	try!(match (args.flag_dry_run, args.flag_new_checksums) {
 		(false, Some(fname)) => {
 			debug!("Writing current version checksums...");
-			match File::create(&fname) {
-				Ok(mut file) => {
-					for (key, value) in &new_checksums {
-						try!(file.write_all(
-							&(format!("{}\t{}\n", value, key).into_bytes()))
-							.or_else(|e| Err(MainError::OtherError(
-								format!("Error writing to checksum file {}: {}", fname, e)))));
-					}
-					trace!("Wrote {} current version checksums to {}...",
-						new_checksums.len(), fname);
-					Ok(())
-				},
-				Err(e) => Err(MainError::OtherError(
-					format!("Error creating checksum file {}: {}", fname, e)))
-			}
+			operations::save_checksums(&new_checksums, &fname)
 		},
 		(true, Some(fname)) => {
 			info!("[dry-run] Checksums would be written to {}", fname);
@@ -216,27 +140,11 @@ fn do_main() -> Result<(),MainError> {
 	// Package altered files in source root into a tarball and write it to the destination
 	if !args.flag_dry_run {
 		debug!("Writing backup file to {}...", args.arg_destination);
-		try!(match File::create(&args.arg_destination) {
-			Ok(file) => {
-				//TODO: We probably don't always want to gzip this.
-				let mut archive = Builder::new(GzEncoder::new(file, Compression::Best));
-				for (fname, hash) in &new_checksums {
-					let old_hash = &old_checksums.get(fname);
-					if old_hash.map_or(true, |h| h != hash) {
-						trace!("Mismatched hashes, archiving: {}\told: {}\tnew: {}",
-							fname, old_hash.unwrap_or(&"<none>".to_string()), hash);
-						let mut full_fname = source_root.clone();
-						full_fname.push(fname);
-						archive.append_file(fname, &mut File::open(full_fname).unwrap()).unwrap();
-					} else {
-						trace!("Matched hashes, not archiving: {}\t{}", fname, hash);
-					}
-				}
-				Ok(())
-			},
-			Err(e) => Err(MainError::OtherError(
-				format!("Error creating target file {}: {}", args.arg_destination, e)))
-		})
+		try!(operations::write_archive(
+				&new_checksums,
+				&old_checksums,
+				&source_root,
+				&args.arg_destination));
 	} else {
 		info!("[dry-run] Output file would be written to {}", args.arg_destination);
 		info!("[dry-run] Output would contain the following files:");
@@ -254,6 +162,7 @@ fn do_main() -> Result<(),MainError> {
 
 fn main() {
 	if let Err(e) = init_log() {
+		use std::io::Write;
 		writeln!(&mut std::io::stderr(), "Could not set logger: {}", e).unwrap();
 		exit(5);
 	}
