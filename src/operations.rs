@@ -22,16 +22,16 @@ pub fn load_checksums(fname: String) -> Result<HashMap<String, String>, MainErro
 						let mut fields = l.split_whitespace();
 						let checksum = match fields.next() {
 							Some(f) => f,
-							_ => continue
+							None => continue
 						};
 						let filename = match fields.next() {
 							Some(f) => f,
-							_ => continue
+							None => continue
 						};
 						trace!("Previous version checksum: {}\t{}", filename, checksum);
 						checksums.insert(filename.to_string(), checksum.to_string());
 					},
-					_ => continue
+					Err(_) => continue
 				}
 			}
 			checksums.shrink_to_fit();

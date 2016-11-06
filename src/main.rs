@@ -112,7 +112,7 @@ fn do_main() -> Result<(),MainError> {
 			debug!("Loading previous version checksums from {}...", fname);
 			try!(operations::load_checksums(fname))
 		},
-		_ => HashMap::with_capacity(0)
+		None => HashMap::with_capacity(0)
 	};
 	debug!("Loaded {} previous version checksums...", old_checksums.len());
 
@@ -130,7 +130,7 @@ fn do_main() -> Result<(),MainError> {
 			info!("[dry-run] Checksums would be written to {}", fname);
 			Ok(())
 		},
-		_ => {
+		(_, None) => {
 			debug!(concat!("No current version checksum file specified, ",
 				"not writing current version checksums..."));
 			Ok(())
